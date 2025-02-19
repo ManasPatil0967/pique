@@ -10,14 +10,35 @@
 #define PORT 12345
 #define MAX_CLIENTS 10
 
-int clients[MAX_CLIENTS] = {0};
+typedef struct {
+    int socket;
+    int recipient_id;
+} ClientInfo;
+
+ClientInfo clients[MAX_CLIENTS] = {0};  // Stores socket and target recipient
+
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+volatile int running = 1;
+
+void send_client_list(int client_socket) {
+    char client_list[1024] = "Connected clients:\n";
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].socket != 0) {
+            char id[20];
+            sprintf(id, "%d\n", clients[i].socket);
+            strcat(client_list, id);
+        }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+    send(client_socket, client_list, strlen(client_list), 0);
+}
 
 void insert_client(int client_socket) {
     pthread_mutex_lock(&clients_mutex);
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i] == 0) {
-            clients[i] = client_socket;
+        if (clients[i].socket == 0) {
+            clients[i].socket = client_socket;
             break;
         }
     }
@@ -27,8 +48,8 @@ void insert_client(int client_socket) {
 void remove_client(int client_socket) {
     pthread_mutex_lock(&clients_mutex);
     for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i] == client_socket) {
-            clients[i] = 0;
+        if (clients[i].socket== client_socket) {
+            clients[i].socket = 0;
             break;
         }
     }
@@ -46,17 +67,11 @@ void *client_handler(void *arg) {
     send(client_socket, "Welcome to the server!\n", 23, 0);
     send(client_socket, "Type 'exit' to quit\n", 20, 0);
     send(client_socket, "Connected clients:\n", 19, 0);
+    send_client_list(client_socket);
 
     while (1) {
-        pthread_mutex_lock(&clients_mutex);
-        for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (clients[i] != 0) {
-                char client_id[20];
-                sprintf(client_id, "%d\n", clients[i]);
-                send(client_socket, client_id, strlen(client_id), 0);
-            }
-        }
-        pthread_mutex_unlock(&clients_mutex);
+        send(client_socket, "Enter /target <id> to chat(or 'exit' to quit or /change to change recipient): ", 70, 0);
+
 
         read_size = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
         if (read_size <= 0) {
@@ -72,18 +87,40 @@ void *client_handler(void *arg) {
         int target_id;
         char message[1000];
 
-        if (sscanf(buffer, "%d:%[^\n]", &target_id, message) != 2) {
-            send(client_socket, "Invalid format. Use: <client_id>:<message>\n", 42, 0);
+        if (sscanf(buffer, "/target %d", &target_id) == 1) {
+            printf("Target set to %d\n", target_id);
+            clients[client_socket].recipient_id = target_id;
+            continue;  // Don't treat it as a message
+        }
+
+        running = 1;
+
+        if (sscanf(buffer, "%*s %[^\n]", message) && clients[client_socket].recipient_id ) {
+            send(client_socket, "Invalid message.\n", 17, 0);
             continue;
+        }
+
+        if (strcmp(message, "/change\n") == 0) {
+            running = 0;
+            break;
         }
 
         int found = 0;
         pthread_mutex_lock(&clients_mutex);
         for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (clients[i] == target_id) {
-                send(clients[i], message, strlen(message), 0);
-                found = 1;
-                break;
+            if (clients[i].socket == client_socket) {
+                if (clients[i].recipient_id == -1) {
+                    send(client_socket, "No target set. Use /target <id> first.\n", 38, 0);
+                    found = 1;
+                } else {
+                    for (int j = 0; j < MAX_CLIENTS; j++) {
+                        if (clients[j].socket == clients[i].recipient_id) {
+                            send(clients[j].socket, message, strlen(message), 0);
+                            found = 1;
+                            break;
+                        }
+                    }
+                }
             }
         }
         pthread_mutex_unlock(&clients_mutex);

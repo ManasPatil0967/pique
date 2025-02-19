@@ -11,6 +11,7 @@
 
 int client_socket;
 volatile int running = 1;  
+volatile int connected = 0;
 
 void *receive_messages(void *socket_desc) {
     int sock = *(int *)socket_desc;
@@ -22,7 +23,7 @@ void *receive_messages(void *socket_desc) {
         if (read_size > 0) {
             buffer[read_size] = '\0';
             printf("\n[New Message]: %s\n", buffer);
-            printf("Enter recipient_id:message: ");  
+            printf("Enter message: ");  
             fflush(stdout);
         } else if (read_size == 0) {
             printf("\nServer disconnected.\n");
@@ -58,13 +59,29 @@ int main() {
     pthread_create(&receive_thread, NULL, receive_messages, (void *)&client_socket);
 
     while (running) {
-        printf("Enter recipient_id:message (or 'exit' to quit): ");
+        if (connected == 0) {
+            printf("Enter /target<recipient_id> to chat(or 'exit' to quit or /change to change recipient): ");
+            fgets(buffer, sizeof(buffer), stdin);
+            send(client_socket, buffer, strlen(buffer), 0);
+            connected = 1;
+            continue;
+        }
+
+        printf("Enter message (or 'exit' to quit): ");
         fgets(buffer, sizeof(buffer), stdin);
+
 
         if (strcmp(buffer, "exit\n") == 0) {
             running = 0;
+            connected = 0;
             send(client_socket, buffer, strlen(buffer), 0);
             break;
+        }
+
+        if (strcmp(buffer, "/change\n") == 0) {
+            connected = 0;
+            send(client_socket, buffer, strlen(buffer), 0);
+            continue;
         }
 
         send(client_socket, buffer, strlen(buffer), 0);
